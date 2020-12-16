@@ -52,7 +52,7 @@ impl ModFileWriter {
         let mut zip = ZipWriter::new(destination);
         zip.set_comment(format!(
             "mod id : {}\nmod name : {}",
-            &config.id, &config.display_name
+            &config.identifier, &config.display_name
         ));
 
         let walkdir = WalkDir::new(&self.source_dir).follow_links(true);
