@@ -3,6 +3,7 @@ use std::io;
 use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 
+use crate::style::StepProgress;
 use crate::ModConfiguration;
 
 use walkdir::WalkDir;
@@ -41,10 +42,13 @@ impl ModFileWriter {
         Self { source_dir }
     }
 
-    //TODO: better logging (use a progress bar library ? color ?)
     pub fn write<D: Write + Seek>(&self, destination: &mut D) -> Result<(), ModFileWriterError> {
-        println!("reading the configuration file");
+        let mut progress = StepProgress::new(4);
         let source_config_file_path = self.source_dir.join(CONFIG_RELATIVE_PATH_TOML);
+        progress.progress(&format!(
+            "reading the {:?} configuration file",
+            source_config_file_path
+        ));
         let mut source_config_file = File::open(&source_config_file_path)
             .map_err(|err| ModFileWriterError::FileIOError(source_config_file_path.clone(), err))?;
         let mut source_config_content = Vec::new();
@@ -56,7 +60,8 @@ impl ModFileWriter {
                 ModFileWriterError::TomlDecodeError(source_config_file_path.clone(), err)
             })?;
 
-        println!("creating the zip file");
+        progress.progress("creating the zip file");
+
         let mut zip = ZipWriter::new(destination);
         zip.set_comment(format!(
             "mod id : {}\nmod name : {}",
@@ -106,14 +111,17 @@ impl ModFileWriter {
             }
         }
 
-        println!("adding the {} file", CONFIG_RELATIVE_PATH_JSON);
+        progress.progress(&format!(
+            "adding the {} configuration file",
+            CONFIG_RELATIVE_PATH_JSON
+        ));
         let config_toml =
             serde_json::to_vec_pretty(&config).map_err(ModFileWriterError::EncodeJsonError)?;
         zip.start_file(CONFIG_RELATIVE_PATH_JSON, zip_options)?;
         zip.write_all(&config_toml)
             .map_err(ModFileWriterError::ZipWriteError)?;
-        println!("finished");
 
+        progress.progress("finished");
         Ok(())
     }
 }

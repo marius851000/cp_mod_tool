@@ -32,6 +32,10 @@ fn main() -> anyhow::Result<(), anyhow::Error> {
     let command: TopLevel = argh::from_env();
     match &command.nested {
         RootSubCommands::Package(package_command) => {
+            println!(
+                "packaging {:?} into {:?}",
+                package_command.source_dir, package_command.output_file
+            );
             let mut destination = File::create(&package_command.output_file).unwrap();
             ModFileWriter::new(PathBuf::from(&package_command.source_dir))
                 .write(&mut destination)?;
