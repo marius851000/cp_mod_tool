@@ -20,7 +20,7 @@ enum RootSubCommands {
 #[argh(subcommand, name = "package")]
 /// Package a mod into a redistributable zip file
 struct PackageCommand {
-    #[argh(option, default="PathBuf::from(\".\")")]
+    #[argh(option, default = "PathBuf::from(\".\")")]
     /// the source directory that contain the mod source.
     source_dir: PathBuf,
     #[argh(option)]

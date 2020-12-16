@@ -22,6 +22,14 @@ pub enum ModFileWriterError {
     TomlDecodeError(PathBuf, #[source] toml::de::Error),
     #[error("error while running walkdir")]
     WalkDirError(#[from] walkdir::Error),
+    #[error("error stripping a the path {0} with {1}")]
+    StripPrefixError(PathBuf, PathBuf, #[source] std::path::StripPrefixError),
+    #[error("error while handling the zip file")]
+    ZipError(#[from] zip::result::ZipError),
+    #[error("error while writing to the zip file")]
+    ZipWriteError(#[source] io::Error),
+    #[error("can't generate the output json configuration file, but can parse the toml one. Probably internal error")]
+    EncodeJsonError(#[source] serde_json::error::Error),
 }
 
 pub struct ModFileWriter {
@@ -59,38 +67,51 @@ impl ModFileWriter {
 
         let zip_options = FileOptions::default().compression_method(CompressionMethod::Deflated);
 
-        let mut actual_zip_content = Vec::new();
+        let mut embedded_content = Vec::new();
         for entry in walkdir {
             let entry = entry?;
 
             let content_abs_path = entry.path();
-            let content_rel_path = content_abs_path.strip_prefix(&self.source_dir).unwrap(); //TODO:
+            let content_rel_path =
+                content_abs_path
+                    .strip_prefix(&self.source_dir)
+                    .map_err(|err| {
+                        ModFileWriterError::StripPrefixError(
+                            content_abs_path.to_path_buf(),
+                            self.source_dir.to_path_buf(),
+                            err,
+                        )
+                    })?;
 
             if entry.file_type().is_file() {
                 if content_rel_path == PathBuf::from(CONFIG_RELATIVE_PATH_TOML) {
                     continue;
                 };
                 println!("adding the file {:?} to the archive", content_rel_path);
-                zip.start_file(content_rel_path.to_string_lossy(), zip_options)
-                    .unwrap(); //TODO:
-                let mut actual_zip_file = File::open(content_abs_path).unwrap(); //TODO:
-                actual_zip_file
-                    .read_to_end(&mut actual_zip_content)
-                    .unwrap(); //TODO
-                zip.write_all(&actual_zip_content).unwrap(); //TODO:
-                actual_zip_content.clear();
+                zip.start_file(content_rel_path.to_string_lossy(), zip_options)?;
+                let mut embedded_file = File::open(content_abs_path).map_err(|err| {
+                    ModFileWriterError::FileIOError(content_abs_path.to_path_buf(), err)
+                })?; //TODO:
+                embedded_file
+                    .read_to_end(&mut embedded_content)
+                    .map_err(|err| {
+                        ModFileWriterError::FileIOError(content_abs_path.to_path_buf(), err)
+                    })?;
+                zip.write_all(&embedded_content)
+                    .map_err(ModFileWriterError::ZipWriteError)?;
+                embedded_content.clear();
             } else {
                 println!("adding the directory {:?} to the archive", content_rel_path);
-                zip.add_directory(content_rel_path.to_string_lossy(), zip_options)
-                    .unwrap(); //TODO:
+                zip.add_directory(content_rel_path.to_string_lossy(), zip_options)?;
             }
         }
 
         println!("adding the {} file", CONFIG_RELATIVE_PATH_JSON);
-        let config_toml = serde_json::to_vec_pretty(&config).unwrap(); //TODO:
-        zip.start_file(CONFIG_RELATIVE_PATH_JSON, zip_options)
-            .unwrap(); //TODO:
-        zip.write_all(&config_toml).unwrap(); //TODO:
+        let config_toml =
+            serde_json::to_vec_pretty(&config).map_err(ModFileWriterError::EncodeJsonError)?;
+        zip.start_file(CONFIG_RELATIVE_PATH_JSON, zip_options)?;
+        zip.write_all(&config_toml)
+            .map_err(ModFileWriterError::ZipWriteError)?;
         println!("finished");
 
         Ok(())
