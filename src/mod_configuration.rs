@@ -16,7 +16,7 @@ pub struct ModConfiguration {
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
-    pub install_strategies: Vec<HashMap<String, String>>, //TODO: allow arbitrary content for the value
+    pub install_strategies: Vec<String>,
     #[serde(default)]
     pub extra_data: HashMap<String, String>, //TODO: allow arbitrary content for the value
 }
