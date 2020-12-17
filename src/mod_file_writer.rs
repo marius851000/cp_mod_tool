@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, Write};
+use std::io::{ErrorKind, Read, Seek, Write};
 use std::path::PathBuf;
 
 use crate::style::StepProgress;
@@ -12,8 +12,12 @@ use zip::{
     CompressionMethod,
 };
 
+use ignore;
+use ignore::gitignore::GitignoreBuilder;
+
 const CONFIG_RELATIVE_PATH_TOML: &str = "config.toml";
 const CONFIG_RELATIVE_PATH_JSON: &str = "config.json";
+const IGNORE_DEFAULT: &str = ".modignore";
 
 #[derive(thiserror::Error, Debug)]
 pub enum ModFileWriterError {
@@ -31,6 +35,8 @@ pub enum ModFileWriterError {
     ZipWriteError(#[source] io::Error),
     #[error("can't generate the output json configuration file, but can parse the toml one. Probably internal error")]
     EncodeJsonError(#[source] serde_json::error::Error),
+    #[error("error while handling the ignore file")] // this one should include path
+    IgnoreFileError(#[from] ignore::Error),
 }
 
 pub struct ModFileWriter {
@@ -43,7 +49,7 @@ impl ModFileWriter {
     }
 
     pub fn write<D: Write + Seek>(&self, destination: &mut D) -> Result<(), ModFileWriterError> {
-        let mut progress = StepProgress::new(4);
+        let mut progress = StepProgress::new(5);
         let source_config_file_path = self.source_dir.join(CONFIG_RELATIVE_PATH_TOML);
         progress.progress(&format!(
             "reading the {:?} configuration file",
@@ -59,6 +65,24 @@ impl ModFileWriter {
             toml::from_slice::<ModConfiguration>(&source_config_content).map_err(|err| {
                 ModFileWriterError::TomlDecodeError(source_config_file_path.clone(), err)
             })?;
+
+        progress.progress("reading the ignore list");
+        let ignore_path = self.source_dir.join(IGNORE_DEFAULT);
+
+        let mut builder = GitignoreBuilder::new(&self.source_dir);
+        let ignore = match builder.add(&ignore_path) {
+            None => Some(builder.build()?),
+            Some(err) => match err.io_error() {
+                Some(io_err) => match io_err.kind() {
+                    ErrorKind::NotFound => {
+                        println!("{:?} not found, ignoring it.", ignore_path);
+                        None
+                    }
+                    _ => return Err(ModFileWriterError::from(err)),
+                },
+                None => return Err(ModFileWriterError::from(err)),
+            },
+        };
 
         progress.progress("creating the zip file");
 
@@ -88,7 +112,19 @@ impl ModFileWriter {
                         )
                     })?;
 
-            if entry.file_type().is_file() {
+            let is_file = entry.file_type().is_file();
+
+            if let Some(ignore) = &ignore {
+                if ignore
+                    .matched_path_or_any_parents(&content_rel_path, !is_file)
+                    .is_ignore()
+                {
+                    println!("ignored {:?}", content_rel_path);
+                    continue;
+                }
+            };
+
+            if is_file {
                 if content_rel_path == PathBuf::from(CONFIG_RELATIVE_PATH_TOML) {
                     continue;
                 };
@@ -96,7 +132,7 @@ impl ModFileWriter {
                 zip.start_file(content_rel_path.to_string_lossy(), zip_options)?;
                 let mut embedded_file = File::open(content_abs_path).map_err(|err| {
                     ModFileWriterError::FileIOError(content_abs_path.to_path_buf(), err)
-                })?; //TODO:
+                })?;
                 embedded_file
                     .read_to_end(&mut embedded_content)
                     .map_err(|err| {
